@@ -1,5 +1,5 @@
 /*
-Sensor-polling script for Dynamic Equilibrium
+Sensor-polling script for Strange Attractor
 Chris Chronopoulos, 20150619
 */
 
@@ -14,7 +14,6 @@ using namespace std;
 
 // ADC objects
 static mcp3008Spi adc0("/dev/spidev0.0", SPI_MODE_0, 1000000, 8);
-static mcp3008Spi adc1("/dev/spidev0.1", SPI_MODE_0, 1000000, 8);
 
 // board sample structures
 static int calibration[8];
@@ -22,6 +21,10 @@ static int droneThreshold[8];
 static int doubleBuffer[2][8];
 static unsigned int iCurrent=2;
 static unsigned int iMinus1=1;
+
+//PCA
+static float pcBasis[8][4];
+static float principalComponents[4];
 
 // hits
 static int hitThreshold1 = 10;
@@ -155,12 +158,19 @@ void findPotentialHits(void)
 void sendBoardSample(void)
 {
     int i;
-    //cout << "bs ";
     for (i=0; i<8; i++){
         cout << doubleBuffer[iCurrent][i] << " ";
     }
     cout << ";" << endl;
-    //cout << endl;
+}
+
+void sendPrincipalComponents(void)
+{
+    int i;
+    for (i=0; i<4; i++){
+        cout << principalComponents[i] << " ";
+    }
+    cout << ";" << endl;
 }
 
 void cycleIndices(void)
@@ -171,9 +181,51 @@ void cycleIndices(void)
     iMinus1 = (iMinus1+1) % 2;
 }
 
+void readPcFile(void)
+{
+    FILE* pcFile;
+    pcFile = fopen("../pca/centralSquare.pca", "r");
+
+    float tmpFloat;
+    int i,j;
+    for (j=0; j<4; j++) {
+        for (i=0; i<8; i++) {
+            fscanf(pcFile, "%f", &tmpFloat);
+            pcBasis[i][j] = tmpFloat;
+        }
+    }
+}
+
+void printPcBasis(void)
+{
+    int i,j;
+    for (j=0; j<4; j++) {
+        for (i=0; i<8; i++) {
+            printf("%.5f ", pcBasis[i][j]);
+        }
+        printf("\n");
+    }
+}
+
+void projectPCA(void)
+{
+    int i,j;
+    float tmpFloat;
+    for (j=0; j<4; j++) {
+        tmpFloat = 0.;
+        for (i=0; i<8; i++) {
+            tmpFloat += doubleBuffer[iCurrent][i] * pcBasis[i][j];
+        }
+        principalComponents[j] = tmpFloat;
+    }
+
+}
+
 
 int main(void)
 {
+
+    readPcFile();
 
     calibrate();
 
@@ -187,7 +239,10 @@ int main(void)
 
         takeBoardSample();
 
-        sendBoardSample();
+        projectPCA();
+
+        //sendBoardSample();
+        sendPrincipalComponents();
 
         //followUpPotentialHits();
         //findPotentialHits();
