@@ -248,7 +248,7 @@ int main(void)
         //findPotentialHits();
 
         cycleIndices();
-        usleep(15000); // 15 ms
+        usleep(30000); // 30 ms
     }
 
     return 0;
