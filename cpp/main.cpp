@@ -167,6 +167,7 @@ void sendBoardSample(void)
 void sendPrincipalComponents(void)
 {
     int i;
+    cout << "pc ";
     for (i=0; i<4; i++){
         cout << principalComponents[i] << " ";
     }
