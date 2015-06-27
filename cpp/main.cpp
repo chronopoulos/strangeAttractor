@@ -16,11 +16,10 @@ using namespace std;
 static mcp3008Spi adc0("/dev/spidev0.0", SPI_MODE_0, 1000000, 8);
 
 // board sample structures
-static int calibration[8];
-static int droneThreshold[8];
-static int doubleBuffer[2][8];
-static unsigned int iCurrent=2;
-static unsigned int iMinus1=1;
+static unsigned int iCurrent=1;
+static unsigned int iMinus1=0;
+static int positionData[2][8];
+static int velocityData[8];
 
 //PCA
 static float pcBasis[8][4];
@@ -41,30 +40,6 @@ static int scale[] =   {0, 2, 4, 7, 9,
 
 static float aveL, aveR;
 
-void calibrate(void)
-{
-
-    unsigned char data[3];
-    int tmpVal = 0;
-    unsigned int i;
-
-    for (i=0; i<8; i++) {
-        data[0] = 1;            // start bit
-        data[1] = 0b10000000 | (i << 4);   // single ended, channel i
-        data[2] = 0;            // don't care
-        adc0.spiWriteRead(data, sizeof(data) );
-        tmpVal = 0;
-        tmpVal = data[1];
-        tmpVal &= 0b00000011;
-        tmpVal <<= 8;
-        tmpVal |= data[2];
-
-        calibration[i] = tmpVal;
-        droneThreshold[i] = tmpVal/26;   // ~30 for calibration=800
-    }
-
-}
-
 void takeBoardSample(void)
 {
 
@@ -82,32 +57,28 @@ void takeBoardSample(void)
         tmpVal &= 0b00000011;
         tmpVal <<= 8;
         tmpVal |= data[2];
-        doubleBuffer[iCurrent][i] = tmpVal;
+        positionData[iCurrent][i] = tmpVal;
+        velocityData[i] = tmpVal - positionData[iMinus1][i];
     }
 
 
 }
 
-int minOfBoardSample(void)
+void cycleIndices(void)
 {
-    int tmp, i;
-    int min=1024;
-    for (i=0; i<8; i++){
-        tmp = doubleBuffer[iCurrent][i];
-        if (tmp<min){
-            min = tmp;
-        }
-    }
-
-    return min;
+    // for 2nd order, could just do logical negation,
+    //   but this is more general to higher-order buffering
+    iCurrent = (iCurrent+1) % 2;
+    iMinus1 = (iMinus1+1) % 2;
 }
+
 
 void followUpPotentialHits(void)
 {
     int diff;
 
     if (potentialHitChanL > 0) {
-        diff = doubleBuffer[iMinus1][potentialHitChanL] - doubleBuffer[iCurrent][potentialHitChanL];
+        diff = positionData[iMinus1][potentialHitChanL] - positionData[iCurrent][potentialHitChanL];
         if (diff < hitThreshold2){
             cout << "hitL " << scale[potentialHitChanL] << " " << potentialHitVelL << ";" << endl;
             if (aveR < 20.){
@@ -117,7 +88,7 @@ void followUpPotentialHits(void)
     }
 
     if (potentialHitChanR > 0) {
-        diff = doubleBuffer[iMinus1][potentialHitChanR] - doubleBuffer[iCurrent][potentialHitChanR];
+        diff = positionData[iMinus1][potentialHitChanR] - positionData[iCurrent][potentialHitChanR];
         if (diff < hitThreshold2){
             cout << "hitR " << scale[potentialHitChanR] << " " << potentialHitVelR << ";" << endl;
             if (aveL < 20.){
@@ -135,7 +106,7 @@ void findPotentialHits(void)
     potentialHitChanL = -1;
     currentMax = 0;
     for (i=0; i<8; i++) {
-        diff = doubleBuffer[iMinus1][i] - doubleBuffer[iCurrent][i];
+        diff = positionData[iMinus1][i] - positionData[iCurrent][i];
         if ( (diff > hitThreshold1) && (diff > currentMax) ) {
             potentialHitChanL = i;
             currentMax = diff;
@@ -146,7 +117,7 @@ void findPotentialHits(void)
     potentialHitChanR = -1;
     currentMax = 0;
     for (i=8; i<8; i++) {
-        diff = doubleBuffer[iMinus1][i] - doubleBuffer[iCurrent][i];
+        diff = positionData[iMinus1][i] - positionData[iCurrent][i];
         if ( (diff > hitThreshold1) && (diff > currentMax) ) {
             potentialHitChanR = i;
             currentMax = diff;
@@ -155,11 +126,15 @@ void findPotentialHits(void)
     potentialHitVelR = currentMax;
 }
 
-void sendBoardSample(void)
+void printRawData(void)
+// use this to save raw data files for PCA calculation
 {
     int i;
     for (i=0; i<8; i++){
-        cout << doubleBuffer[iCurrent][i] << " ";
+        cout << positionData[iCurrent][i] << " ";
+    }
+    for (i=0; i<8; i++){
+        cout << velocityData[i] << " ";
     }
     cout << ";" << endl;
 }
@@ -174,18 +149,10 @@ void sendPrincipalComponents(void)
     cout << ";" << endl;
 }
 
-void cycleIndices(void)
-{
-    // for 2nd order, could just do logical negation,
-    //   but this is more general to higher-order buffering
-    iCurrent = (iCurrent+1) % 2;
-    iMinus1 = (iMinus1+1) % 2;
-}
-
-void readPcFile(void)
+void readPcFile(char* filename)
 {
     FILE* pcFile;
-    pcFile = fopen("../pca/centralSquare.pca", "r");
+    pcFile = fopen(filename, "r");
 
     float tmpFloat;
     int i,j;
@@ -195,9 +162,12 @@ void readPcFile(void)
             pcBasis[i][j] = tmpFloat;
         }
     }
+
+    fclose(pcFile);
 }
 
 void printPcBasis(void)
+// for debugging
 {
     int i,j;
     for (j=0; j<4; j++) {
@@ -215,7 +185,7 @@ void projectPCA(void)
     for (j=0; j<4; j++) {
         tmpFloat = 0.;
         for (i=0; i<8; i++) {
-            tmpFloat += doubleBuffer[iCurrent][i] * pcBasis[i][j];
+            tmpFloat += positionData[iCurrent][i] * pcBasis[i][j];
         }
         principalComponents[j] = tmpFloat;
     }
@@ -223,12 +193,18 @@ void projectPCA(void)
 }
 
 
-int main(void)
+int main(int argc, char *argv[])
 {
 
-    readPcFile();
+    int calibration;
+    if (argc > 1) {
+        readPcFile(argv[1]);
+        //printPcBasis();
+        calibration = 0;
+    } else {
+        calibration = 1;
+    }
 
-    calibrate();
 
     // warm up
     for (int i=0; i<4; i++){
@@ -238,15 +214,14 @@ int main(void)
 
     while(1){
 
-        takeBoardSample();
+        takeBoardSample(); // update positionData and velocityData
 
-        projectPCA();
-
-        //sendBoardSample();
-        sendPrincipalComponents();
-
-        //followUpPotentialHits();
-        //findPotentialHits();
+        if (calibration) {
+            printRawData();
+        } else {
+            projectPCA();
+            sendPrincipalComponents();
+        }
 
         cycleIndices();
         usleep(30000); // 30 ms
